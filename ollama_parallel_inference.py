@@ -19,16 +19,15 @@ client = OpenAI(
 )
 
 # 数据集路径
-IMAGE_DIR_1 = "data/HAM10000/HAM10000_images_part_1"
-IMAGE_DIR_2 = "data/HAM10000/HAM10000_images_part_2"
-METADATA_FILE = "data/HAM10000/HAM10000_metadata.csv"
+IMAGE_DIR = "ISIC2019/ISIC_2019_Test_Input"
+METADATA_FILE = "ISIC2019/ISIC_2019_Test_GroundTruth.csv"
 
 # 结果和检查点路径
-RESULTS_FILE = "ollama_classification_results.csv"
-CHECKPOINT_FILE = "ollama_checkpoint.json"
+RESULTS_FILE = "isic2019_ollama_classification_results.csv"
+CHECKPOINT_FILE = "isic2019_ollama_checkpoint.json"
 
-# 用于分类的类别列表
-categories = ["akiec", "bcc", "bkl", "df", "mel", "nv", "vasc"]
+# 用于分类的类别列表 (ISIC2019有8个类别，不包括UNK)
+categories = ["MEL", "NV", "BCC", "AK", "BKL", "DF", "VASC", "SCC"]
 categories_str = ", ".join(categories)
 
 # 视觉语言模型的提示
@@ -43,30 +42,33 @@ PROMPT_TEXT = f"""
 5.  **整体评估**：综合以上特征，病变给人的整体感觉是良性的（有序、规则）还是恶性的（混乱、不规则）？
 
 **第二步：分类判断**
-根据你的分析，将图像归类到以下七个类别之一：{categories_str}。
-    - **黑色素瘤 (mel, Melanoma)**  
+根据你的分析，将图像归类到以下八个类别之一：{categories_str}。
+    - 黑色素瘤 (MEL, Melanoma)
       特征：明显的不对称性、不规则边缘、颜色多样性（棕、黑、蓝、白、红等），  
       非典型色素网络、蓝白幕、放射状线条、负网状结构、不对称的小点或条纹、局部回避区等恶性特征。 
  
-    - **基底细胞癌 (bcc, Basal Cell Carcinoma)**  
-      特征：树枝状血管、蓝灰色卵圆巢、光滑珠光边缘、溃疡或结痂区域、车轮辐射状结构、白色条纹或亮点。 
- 
-    - **黑色素细胞痣 (nv, Melanocytic Nevus)**  
+    - 黑色素细胞痣 (NV, Melanocytic Nevus) 
       特征：整体对称、规则的色素网络、均匀的棕色色调、清晰边界、  
       可见规则点状或球状结构、均匀分布的色素网格。 
  
-    - **脂溢性角化病 (bkl, Benign Keratosis)**  
+    - 基底细胞癌 (BCC, Basal Cell Carcinoma)
+      特征：树枝状血管、蓝灰色卵圆巢、光滑珠光边缘、溃疡或结痂区域、车轮辐射状结构、白色条纹或亮点。 
+ 
+    - 光化性角化病 (AK, Actinic Keratosis)
+      特征：红白交错的表面、毛细血管扩张、鳞屑、角质过度增生、淡棕或红色调，  
+      可能可见"草地样"或"红白斑块状"结构。 
+ 
+    - 脂溢性角化病 (BKL, Benign Keratosis)  
       特征：粉刺样开口、脑回状（丘脑状）结构、粘贴感外观、白色假网状结构、角质栓、黑点或伪毛囊口。 
  
-    - **光化性角化病 (akiec, Actinic Keratosis)**  
-      特征：红白交错的表面、毛细血管扩张、鳞屑、角质过度增生、淡棕或红色调，  
-      可能可见“草地样”或“红白斑块状”结构。 
- 
-    - **皮肤纤维瘤 (df, Dermatofibroma)**  
+    - 皮肤纤维瘤 (DF, Dermatofibroma)
       特征：中心棕色区伴周围淡色晕、放射状色素结构、中心瘢痕样白区、周边色素网络逐渐消退、轻微凹陷。 
  
-    - **血管性病变 (vasc, Vascular Lesion)**  
+    - 血管性病变 (VASC, Vascular Lesion)
       特征：均匀的红色至紫色区域、清晰可见的血管结构、点状或线状血管、湖状血管样分布、整体对称。
+      
+    - 鳞状细胞癌 (SCC, Squamous Cell Carcinoma)
+      特征：鳞屑、结痂、角化、溃疡、不规则血管、白色或黄色角质区域、边界不清晰。
 
 **第三步：输出结果**
 请只输出最终确定的类别缩写。不要包含任何分析、解释或额外文字。
@@ -94,7 +96,7 @@ def classify_image(image_id, image_path):
 
     try:
         response = client.chat.completions.create(
-            model="qwen2.5vl:32b",
+            model="minicpm-v:8b",
             messages=[
                 {
                     "role": "user",
@@ -111,12 +113,12 @@ def classify_image(image_id, image_path):
             ],
             max_tokens=10, # 期望得到一个简短的类别名称
         )
-        predicted_class = response.choices[0].message.content.strip().lower()
+        predicted_class = response.choices[0].message.content.strip().upper()
 
         # 验证模型的输出
         if predicted_class not in categories:
-            print(f"警告：图像 {image_id} 的模型返回了一个意外的类别 '{predicted_class}'。将其设置为'unknown'。")
-            predicted_class = "unknown"
+            print(f"警告：图像 {image_id} 的模型返回了一个意外的类别 '{predicted_class}'。将其设置为'error'。")
+            predicted_class = "error"
 
         return image_id, {"predicted_class": predicted_class}
 
@@ -146,22 +148,23 @@ def main():
     # 加载元数据
     metadata_df = pd.read_csv(METADATA_FILE)
     print(f"已加载 {len(metadata_df)} 张图像的元数据。")
+    
+    # 过滤掉UNK类别的图像
+    non_unk_df = metadata_df[metadata_df['UNK'] == 0.0]
+    print(f"过滤掉UNK类别后剩余 {len(non_unk_df)} 张图像。")
 
     # 获取所有图像路径
-    image_paths_part1 = glob.glob(os.path.join(IMAGE_DIR_1, '*.jpg'))
-    image_paths_part2 = glob.glob(os.path.join(IMAGE_DIR_2, '*.jpg'))
-    all_image_paths = image_paths_part1 + image_paths_part2
-    
-    image_id_to_path = {os.path.basename(p).split('.')[0]: p for p in all_image_paths}
-    print(f"共找到 {len(all_image_paths)} 张图像。")
+    image_paths = glob.glob(os.path.join(IMAGE_DIR, '*.jpg'))
+    image_id_to_path = {os.path.basename(p).split('.')[0]: p for p in image_paths}
+    print(f"共找到 {len(image_paths)} 张图像。")
 
     # 从检查点加载
     processed_ids, results = load_checkpoint()
     print(f"已加载检查点。{len(processed_ids)} 张图像已被处理。")
 
-    # 确定要处理的图像
+    # 确定要处理的图像（只处理非UNK类别的图像）
     unprocessed_tasks = []
-    for img_id in metadata_df['image_id']:
+    for img_id in non_unk_df['image']:
         if img_id not in processed_ids and img_id in image_id_to_path:
             unprocessed_tasks.append((img_id, image_id_to_path[img_id]))
     
@@ -204,8 +207,24 @@ def main():
 
     # --- 4. 评估 ---
     print("\n--- 正在评估准确率 ---")
-    merged_df = pd.merge(results_df, metadata_df[['image_id', 'dx']], on='image_id', how='inner')
-    merged_df = merged_df.rename(columns={'dx': 'true_class'})
+    
+    # 获取真实标签（ISIC2019使用one-hot编码，需要转换）
+    gt_subset = non_unk_df[non_unk_df['image'].isin(results_df['image_id'])]
+    
+    # 将one-hot编码转换为类别标签
+    true_classes = []
+    for _, row in gt_subset.iterrows():
+        image_id = row['image']
+        # 找出值为1.0的列名（类别）
+        for cat in categories:
+            if row[cat] == 1.0:
+                true_classes.append({"image_id": image_id, "true_class": cat})
+                break
+    
+    gt_df = pd.DataFrame(true_classes)
+    
+    # 合并预测结果和真实标签
+    merged_df = pd.merge(results_df, gt_df, left_on='image_id', right_on='image_id', how='inner')
 
     correct_predictions = (merged_df['predicted_class'] == merged_df['true_class']).sum()
     total_predictions = len(merged_df)
